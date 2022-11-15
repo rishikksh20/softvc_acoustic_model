@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
+from acoustic.gst import GST
 
 URLS = {
     "hubert-discrete": "https://github.com/bshall/acoustic-model/releases/download/v0.1/hubert-discrete-d49e1c77.pt",
@@ -9,18 +10,36 @@ URLS = {
 
 
 class AcousticModel(nn.Module):
-    def __init__(self, discrete: bool = False, upsample: bool = True):
+    def __init__(self, discrete: bool = False, upsample: bool = True, use_gst: bool = False):
         super().__init__()
         self.encoder = Encoder(discrete, upsample)
+        # define gst
+        self.use_gst = use_gst
+        if use_gst:
+            self.gst = GST(
+                dim=512,
+                ref_dim=128,
+                ref_filters=[32, 32, 64, 64, 128, 128],
+                num_style=10,
+                aheads=4
+            )
         self.decoder = Decoder()
 
     def forward(self, x: torch.Tensor, mels: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
+
+        if self.use_gst:
+            uttr = self.gst(mels)
+            x = x + uttr.repeat(1, x.size(1), 1)
+
         return self.decoder(x, mels)
 
     @torch.inference_mode()
-    def generate(self, x: torch.Tensor) -> torch.Tensor:
+    def generate(self, x: torch.Tensor, mels: torch.Tensor = None) -> torch.Tensor:
         x = self.encoder(x)
+        if self.use_gst:
+            uttr = self.gst(mels)
+            x = x + uttr.repeat(1, x.size(1), 1)
         return self.decoder.generate(x)
 
 
