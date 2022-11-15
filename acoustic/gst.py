@@ -6,7 +6,7 @@ class ReferenceEncoder(nn.Module):
     outputs --- [N, ref_enc_gru_size]
     '''
 
-    def __init__(self, ref_dim=128, ref_filters= [32, 32, 64, 64, 128, 128], stride=(2, 2), mel_bins=80):
+    def __init__(self, ref_dim=128, ref_filters= [32, 32, 64, 64, 128, 128], stride=(2, 2), mel_bins=128):
 
         super().__init__()
         ref_enc_filters = ref_filters
@@ -121,7 +121,7 @@ class STL(nn.Module):
 class GST(nn.Module):
     '''
     input:
-        inputs --- [N, Tmax, mel_bin] --- [2, 100, 80]
+        inputs --- [N, Tmax, mel_bin] --- [2, 100, 128]
     output:
         out --- [N, 1, dim] --- [2, 1, 256]
     '''
