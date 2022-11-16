@@ -27,7 +27,7 @@ class ReferenceEncoder(nn.Module):
 
     def forward(self, inputs):
         N = inputs.size(0)
-        out = inputs.contiguous().view(N, 1, -1, 80)  # [N, 1, Ty, n_mels]
+        out = inputs.contiguous().view(N, 1, -1, 128)  # [N, 1, Ty, n_mels]
         for conv, bn in zip(self.convs, self.bns):
             out = conv(out)
             out = bn(out)
