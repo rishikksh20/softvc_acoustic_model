@@ -12,6 +12,7 @@ class MelDataset(Dataset):
         self.discrete = discrete
         self.mels_dir = root / "mels"
         self.units_dir = root / "discrete" if discrete else root / "soft"
+        self.spk_embs_dir = root / "spk_embs"
 
         pattern = "train/**/*.npy" if train else "dev/**/*.npy"
         self.metadata = [
@@ -26,23 +27,26 @@ class MelDataset(Dataset):
         path = self.metadata[index]
         mel_path = self.mels_dir / path
         units_path = self.units_dir / path
+        spk_emb_path = self.spk_embs_dir / path
 
         mel = np.load(mel_path.with_suffix(".npy")).T
         units = np.load(units_path.with_suffix(".npy"))
+        spk_emb = np.load(spk_emb_path.with_suffix(".npy"))
 
         length = 2 * units.shape[0]
 
         mel = torch.from_numpy(mel[:length, :])
         mel = F.pad(mel, (0, 0, 1, 0))
         units = torch.from_numpy(units)
+        spk_emb = torch.from_numpy(spk_emb)
         if self.discrete:
             units = units.long()
-        return mel, units
+        return mel, units, spk_emb
 
     def pad_collate(self, batch):
-        mels, units = zip(*batch)
+        mels, units, spk_embs = zip(*batch)
 
-        mels, units = list(mels), list(units)
+        mels, units, spk_embs = list(mels), list(units), list(spk_embs)
 
         mels_lengths = torch.tensor([x.size(0) - 1 for x in mels])
         units_lengths = torch.tensor([x.size(0) for x in units])
@@ -51,5 +55,6 @@ class MelDataset(Dataset):
         units = pad_sequence(
             units, batch_first=True, padding_value=100 if self.discrete else 0
         )
+        spk_embs = torch.stack(spk_embs).squeeze()
 
-        return mels, mels_lengths, units, units_lengths
+        return mels, mels_lengths, units, units_lengths, spk_embs

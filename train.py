@@ -162,9 +162,10 @@ def train(rank, world_size, args):
         acoustic.train()
         epoch_loss.reset()
 
-        for mels, mels_lengths, units, units_lengths in train_loader:
+        for mels, mels_lengths, units, units_lengths, spk_embs in train_loader:
             mels, mels_lengths = mels.to(rank), mels_lengths.to(rank)
             units, units_lengths = units.to(rank), units_lengths.to(rank)
+            spk_embs = spk_embs.to(rank)
 
             ############################################################################
             # Compute training loss
@@ -172,7 +173,7 @@ def train(rank, world_size, args):
 
             optimizer.zero_grad()
 
-            mels_ = acoustic(units, mels[:, :-1, :])
+            mels_ = acoustic(units, mels[:, :-1, :], spk_embs)
 
             loss = F.l1_loss(mels_, mels[:, 1:, :], reduction="none")
             loss = torch.sum(loss, dim=(1, 2)) / (mels_.size(-1) * mels_lengths)

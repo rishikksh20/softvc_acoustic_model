@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from acoustic.gst import GST
 
@@ -10,7 +11,7 @@ URLS = {
 
 
 class AcousticModel(nn.Module):
-    def __init__(self, discrete: bool = False, upsample: bool = True, use_gst: bool = False):
+    def __init__(self, discrete: bool = False, upsample: bool = True, use_gst: bool = False, use_utt_embed=True, utt_embed=704, spk_emb_bottleneck_size=128):
         super().__init__()
         self.encoder = Encoder(discrete, upsample)
         # define gst
@@ -23,14 +24,25 @@ class AcousticModel(nn.Module):
                 num_style=10,
                 aheads=4
             )
+        self.connect_utt_emb_at_encoder_out = use_utt_embed
+
+        if use_utt_embed:
+            self.hs_emb_projection = torch.nn.Linear(512 + spk_emb_bottleneck_size, 512)
+            # embedding projection derived from https://arxiv.org/pdf/1705.08947.pdf
+            self.embedding_projection = torch.nn.Sequential(torch.nn.Linear(utt_embed, spk_emb_bottleneck_size),
+                                                            torch.nn.Softsign())
+
         self.decoder = Decoder()
 
-    def forward(self, x: torch.Tensor, mels: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mels: torch.Tensor, utterance_embedding: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
 
         if self.use_gst:
             uttr = self.gst(mels)
             x = x + uttr.repeat(1, x.size(1), 1)
+        
+        if utterance_embedding is not None and self.connect_utt_emb_at_encoder_out:
+            x = self._integrate_with_utt_embed(x, utterance_embedding)
 
         return self.decoder(x, mels)
 
@@ -41,6 +53,14 @@ class AcousticModel(nn.Module):
             uttr = self.gst(mels)
             x = x + uttr.repeat(1, x.size(1), 1)
         return self.decoder.generate(x)
+
+    def _integrate_with_utt_embed(self, hs, utt_embeddings):
+        # project embedding into smaller space
+        speaker_embeddings_projected = self.embedding_projection(utt_embeddings)
+        # concat hidden states with spk embeds and then apply projection
+        speaker_embeddings_expanded = F.normalize(speaker_embeddings_projected).unsqueeze(1).expand(-1, hs.size(1), -1)
+        hs = self.hs_emb_projection(torch.cat([hs, speaker_embeddings_expanded], dim=-1))
+        return hs
 
 
 class Encoder(nn.Module):

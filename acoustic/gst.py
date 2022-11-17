@@ -1,4 +1,6 @@
 from torch import nn
+import torch
+import torch.nn.functional as F
 
 class ReferenceEncoder(nn.Module):
     '''
@@ -102,7 +104,7 @@ class STL(nn.Module):
         # self.attention = MultiHeadAttention(hp.num_heads, d_model, d_q, d_v)
         self.attention = MultiHeadAttention(query_dim=d_q, key_dim=d_k, num_units=dim, num_heads=aheads)
 
-        init.normal_(self.embed, mean=0, std=0.5)
+        torch.nn.init.normal_(self.embed, mean=0, std=0.5)
 
     def forward(self, inputs):
         N = inputs.size(0)
