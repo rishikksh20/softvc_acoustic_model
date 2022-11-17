@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import SequentialSampler
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -37,12 +38,12 @@ INIT_METHOD = "tcp://localhost:54321"
 
 
 def train(rank, world_size, args):
-    dist.init_process_group(
-        BACKEND,
-        rank=rank,
-        world_size=world_size,
-        init_method=INIT_METHOD,
-    )
+    # dist.init_process_group(
+    #     BACKEND,
+    #     rank=rank,
+    #     world_size=world_size,
+    #     init_method=INIT_METHOD,
+    # )
 
     ####################################################################################
     # Setup logging utilities:
@@ -69,9 +70,9 @@ def train(rank, world_size, args):
     # Initialize models and optimizer
     ####################################################################################
 
-    acoustic = AcousticModel().to(rank)
+    acoustic = AcousticModel(use_gst=True).to(rank)
 
-    acoustic = DDP(acoustic, device_ids=[rank])
+    # acoustic = DDP(acoustic, device_ids=[rank])
 
     optimizer = optim.AdamW(
         acoustic.parameters(),
@@ -89,7 +90,8 @@ def train(rank, world_size, args):
         train=True,
         discrete=args.discrete,
     )
-    train_sampler = DistributedSampler(train_dataset, drop_last=True)
+    # train_sampler = DistributedSampler(train_dataset, drop_last=True)
+    train_sampler = SequentialSampler(train_dataset)
     train_loader = DataLoader(
         train_dataset,
         batch_size=BATCH_SIZE,
@@ -155,7 +157,7 @@ def train(rank, world_size, args):
     validation_loss = Metric()
 
     for epoch in range(start_epoch, n_epochs + 1):
-        train_sampler.set_epoch(epoch)
+        # train_sampler.set_epoch(epoch)
 
         acoustic.train()
         epoch_loss.reset()
@@ -273,7 +275,7 @@ def train(rank, world_size, args):
         # End training loop
         # ==================================================================================#
 
-    dist.destroy_process_group()
+    # dist.destroy_process_group()
 
 
 if __name__ == "__main__":
@@ -303,9 +305,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     world_size = torch.cuda.device_count()
-    mp.spawn(
-        train,
-        args=(world_size, args),
-        nprocs=world_size,
-        join=True,
-    )
+    train(0, 1, args)
+    # mp.spawn(
+    #     train,
+    #     args=(world_size, args),
+    #     nprocs=world_size,
+    #     join=True,
+    # )
