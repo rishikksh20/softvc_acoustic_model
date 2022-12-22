@@ -12,10 +12,10 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import SequentialSampler
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+from acoustic.predictor import PitchPredictorLoss
 from acoustic import AcousticModel
 from acoustic.dataset import MelDataset
-from acoustic.utils import Metric, save_checkpoint, load_checkpoint, plot_spectrogram
+from acoustic.utils import Metric, save_checkpoint, load_checkpoint, plot_spectrogram, make_non_pad_mask
 
 
 logging.basicConfig(level=logging.DEBUG)
@@ -71,6 +71,7 @@ def train(rank, world_size, args):
     ####################################################################################
 
     acoustic = AcousticModel(use_gst=True).to(rank)
+    pitch_criterion = PitchPredictorLoss()
 
     # acoustic = DDP(acoustic, device_ids=[rank])
 
@@ -162,9 +163,10 @@ def train(rank, world_size, args):
         acoustic.train()
         epoch_loss.reset()
 
-        for mels, mels_lengths, units, units_lengths in train_loader:
+        for mels, mels_lengths, units, units_lengths, ps, ps_spec, p_mean, p_std in train_loader:
             mels, mels_lengths = mels.to(rank), mels_lengths.to(rank)
             units, units_lengths = units.to(rank), units_lengths.to(rank)
+            ps, ps_spec, p_mean, p_std = ps.to(rank), ps_spec.to(rank), p_mean.to(rank), p_std.to(rank)
 
             ############################################################################
             # Compute training loss
@@ -172,10 +174,20 @@ def train(rank, world_size, args):
 
             optimizer.zero_grad()
 
-            mels_ = acoustic(units, mels[:, :-1, :])
+            mels_, p_outs, p_avg_outs, p_std_outs, mel_masks = acoustic(units, mels[:, :-1, :], ps, mels_lengths)
 
             loss = F.l1_loss(mels_, mels[:, 1:, :], reduction="none")
+
+            out_masks = make_non_pad_mask(mels_lengths).unsqueeze(-1).to(mels.device)
+            ps_spec = ps_spec.masked_select(out_masks)  # Write size
+            p_outs = p_outs.masked_select(out_masks)  # Write size
+            pitch_loss = pitch_criterion(ps_spec, p_outs)
+            pitch__mean_loss = pitch_criterion(p_mean, p_avg_outs)
+            pitch_std_loss = pitch_criterion(p_std, p_std_outs)
+
             loss = torch.sum(loss, dim=(1, 2)) / (mels_.size(-1) * mels_lengths)
+
+            loss = loss + pitch_loss + pitch__mean_loss + pitch_std_loss
             loss = torch.mean(loss)
 
             loss.backward()
@@ -206,12 +218,17 @@ def train(rank, world_size, args):
                 acoustic.eval()
                 validation_loss.reset()
 
-                for i, (mels, units) in enumerate(validation_loader, 1):
+                for i, (mels, units, ps, ps_spec, p_mean, p_std) in enumerate(validation_loader, 1):
                     mels, units = mels.to(rank), units.to(rank)
+                    ps, ps_spec, p_mean, p_std = ps.to(rank), ps_spec.to(rank), p_mean.to(rank), p_std.to(rank)
 
                     with torch.no_grad():
-                        mels_ = acoustic(units, mels[:, :-1, :])
+                        mels_, p_outs, p_avg_outs, p_std_outs, mel_masks = acoustic(units, mels[:, :-1, :], ps, ps.shape[-1])
                         loss = F.l1_loss(mels_, mels[:, 1:, :])
+                        pitch_loss = pitch_criterion(ps_spec, p_outs)
+                        pitch__mean_loss = pitch_criterion(p_mean, p_avg_outs)
+                        pitch_std_loss = pitch_criterion(p_std, p_std_outs)
+
 
                     ####################################################################
                     # Update validation metrics and log generated mels

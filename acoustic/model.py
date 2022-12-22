@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
-from acoustic.gst import GST
-
+from acoustic.predictor import PitchPredictor
+from acoustic.utils import make_pad_mask
 URLS = {
     "hubert-discrete": "https://github.com/bshall/acoustic-model/releases/download/v0.1/hubert-discrete-d49e1c77.pt",
     "hubert-soft": "https://github.com/bshall/acoustic-model/releases/download/v0.1/hubert-soft-0321fd7e.pt",
@@ -10,36 +10,44 @@ URLS = {
 
 
 class AcousticModel(nn.Module):
-    def __init__(self, discrete: bool = False, upsample: bool = True, use_gst: bool = False):
+    def __init__(self, discrete: bool = False, upsample: bool = True, pmin=70, pmax=500 ):
         super().__init__()
         self.encoder = Encoder(discrete, upsample)
         # define gst
-        self.use_gst = use_gst
-        if use_gst:
-            self.gst = GST(
-                dim=512,
-                ref_dim=128,
-                ref_filters=[32, 32, 64, 64, 128, 128],
-                num_style=10,
-                aheads=4
-            )
+        self.pitch_predictor = PitchPredictor(
+            idim=256,
+            n_layers=2,
+            n_chans=256,
+            kernel_size=3,
+            dropout_rate=0.5,
+            min=pmin,
+            max=pmax,
+            out=256,
+        )
+        self.pitch_embed = torch.nn.Linear(256, 256)
         self.decoder = Decoder()
 
-    def forward(self, x: torch.Tensor, mels: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mels: torch.Tensor, ps: torch.Tensor, mels_lengths: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
+        mel_masks = make_pad_mask(mels_lengths).unsqueeze(-1).to(x.device)
+        with torch.no_grad():
+            # ds = self.duration_calculator(xs, ilens, ys, olens)  # (B, Tmax)
+            # print("one_hot_energy:", one_hot_energy.shape)
+            one_hot_pitch = self.pitch_predictor.to_one_hot(
+                ps.detach()
+            )
+        p_outs, p_avg_outs, p_std_outs = self.pitch_predictor(x, mels_lengths, mel_masks)
 
-        if self.use_gst:
-            uttr = self.gst(mels)
-            x = x + uttr.repeat(1, x.size(1), 1)
+        x = x + self.pitch_embed(one_hot_pitch)
 
-        return self.decoder(x, mels)
+        return self.decoder(x, mels), p_outs, p_avg_outs, p_std_outs, mel_masks
 
     @torch.inference_mode()
     def generate(self, x: torch.Tensor, mels: torch.Tensor = None) -> torch.Tensor:
         x = self.encoder(x)
-        if self.use_gst:
-            uttr = self.gst(mels)
-            x = x + uttr.repeat(1, x.size(1), 1)
+        one_hot_pitch = self.pitch_predictor.inference(x, x.shape[1])
+        x = x + self.pitch_embed(one_hot_pitch)
+
         return self.decoder.generate(x)
 
 
